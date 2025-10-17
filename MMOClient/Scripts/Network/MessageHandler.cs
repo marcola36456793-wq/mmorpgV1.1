@@ -449,6 +449,7 @@ public class MessageHandler : MonoBehaviour
         if (ClientManager.Instance != null)
         {
             ClientManager.Instance.OnMessageReceived -= HandleMessage;
+			
         }
     }
 }
