@@ -4,6 +4,12 @@ using UnityEngine.SceneManagement;
 using TMPro;
 using Newtonsoft.Json;
 
+/// <summary>
+/// ✅ LoginUI CORRIGIDO
+/// - Remove conexão duplicada
+/// - Aguarda conexão antes de permitir login
+/// - Melhor feedback visual
+/// </summary>
 public class LoginUI : MonoBehaviour
 {
     [Header("UI Elements")]
@@ -22,20 +28,146 @@ public class LoginUI : MonoBehaviour
     public Button confirmRegisterButton;
     public Button backButton;
 
+    [Header("Connection Status")]
+    public GameObject connectionStatusPanel; // Opcional: painel de status
+    public TextMeshProUGUI connectionStatusText; // Opcional: texto de status
+
+    private bool isConnecting = false;
+    private bool isConnected = false;
+
     private void Start()
     {
-        ClientManager.Instance.Connect();
+        // ✅ NÃO chama Connect() aqui - deixa ClientManager.Start() fazer isso
+        // Apenas aguarda conexão
 
+        // Configura botões
         loginButton.onClick.AddListener(OnLoginClick);
         registerButton.onClick.AddListener(ShowRegisterPanel);
         confirmRegisterButton.onClick.AddListener(OnRegisterClick);
         backButton.onClick.AddListener(ShowLoginPanel);
 
-        MessageHandler.Instance.OnLoginResponse += HandleLoginResponse;
-        MessageHandler.Instance.OnRegisterResponse += HandleRegisterResponse;
+        // ✅ Registra eventos de conexão
+        if (ClientManager.Instance != null)
+        {
+            ClientManager.Instance.OnConnected += OnConnectedToServer;
+            ClientManager.Instance.OnDisconnected += OnDisconnectedFromServer;
+        }
+
+        // Registra eventos de resposta
+        if (MessageHandler.Instance != null)
+        {
+            MessageHandler.Instance.OnLoginResponse += HandleLoginResponse;
+            MessageHandler.Instance.OnRegisterResponse += HandleRegisterResponse;
+        }
 
         ShowLoginPanel();
+        
+        // ✅ Verifica se já está conectado
+        CheckConnectionStatus();
     }
+
+    private void OnDestroy()
+    {
+        // Limpa eventos
+        if (ClientManager.Instance != null)
+        {
+            ClientManager.Instance.OnConnected -= OnConnectedToServer;
+            ClientManager.Instance.OnDisconnected -= OnDisconnectedFromServer;
+        }
+
+        if (MessageHandler.Instance != null)
+        {
+            MessageHandler.Instance.OnLoginResponse -= HandleLoginResponse;
+            MessageHandler.Instance.OnRegisterResponse -= HandleRegisterResponse;
+        }
+    }
+
+    // ===================================
+    // CONTROLE DE CONEXÃO
+    // ===================================
+
+    private void CheckConnectionStatus()
+    {
+        if (ClientManager.Instance == null)
+        {
+            ShowConnectionStatus("❌ ClientManager não encontrado!", Color.red);
+            DisableButtons();
+            return;
+        }
+
+        if (ClientManager.Instance.IsConnected)
+        {
+            OnConnectedToServer();
+        }
+        else
+        {
+            ShowConnectionStatus("🔌 Conectando ao servidor...", Color.yellow);
+            DisableButtons();
+            isConnecting = true;
+        }
+    }
+
+    private void OnConnectedToServer()
+    {
+        isConnecting = false;
+        isConnected = true;
+        ShowConnectionStatus("✅ Conectado ao servidor!", Color.green);
+        EnableButtons();
+        
+        // Esconde status após 2 segundos
+        Invoke(nameof(HideConnectionStatus), 2f);
+    }
+
+    private void OnDisconnectedFromServer()
+    {
+        isConnected = false;
+        ShowConnectionStatus("❌ Desconectado do servidor!", Color.red);
+        DisableButtons();
+        statusText.text = "Conexão perdida. Tentando reconectar...";
+        statusText.color = Color.red;
+    }
+
+    private void ShowConnectionStatus(string message, Color color)
+    {
+        Debug.Log(message);
+        
+        if (connectionStatusPanel != null)
+        {
+            connectionStatusPanel.SetActive(true);
+        }
+        
+        if (connectionStatusText != null)
+        {
+            connectionStatusText.text = message;
+            connectionStatusText.color = color;
+        }
+    }
+
+    private void HideConnectionStatus()
+    {
+        if (connectionStatusPanel != null)
+        {
+            connectionStatusPanel.SetActive(false);
+        }
+    }
+
+    private void DisableButtons()
+    {
+        if (loginButton != null) loginButton.interactable = false;
+        if (registerButton != null) registerButton.interactable = false;
+        if (confirmRegisterButton != null) confirmRegisterButton.interactable = false;
+    }
+
+    private void EnableButtons()
+    {
+        if (loginButton != null) loginButton.interactable = true;
+        if (registerButton != null) registerButton.interactable = true;
+        if (confirmRegisterButton != null) confirmRegisterButton.interactable = true;
+    }
+
+    // ===================================
+    // NAVEGAÇÃO DE PAINÉIS
+    // ===================================
 
     private void ShowLoginPanel()
     {
@@ -51,14 +183,41 @@ public class LoginUI : MonoBehaviour
         statusText.text = "";
     }
 
+    // ===================================
+    // LOGIN
+    // ===================================
+
     private void OnLoginClick()
     {
-        string username = usernameInput.text;
+        // ✅ Verifica conexão antes de tentar login
+        if (!isConnected)
+        {
+            statusText.text = "Aguarde a conexão com o servidor...";
+            statusText.color = Color.yellow;
+            return;
+        }
+
+        string username = usernameInput.text.Trim();
         string password = passwordInput.text;
 
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
         {
             statusText.text = "Por favor, preencha todos os campos.";
+            statusText.color = Color.red;
+            return;
+        }
+
+        // ✅ Validação básica no cliente
+        if (username.Length < 3)
+        {
+            statusText.text = "Username deve ter pelo menos 3 caracteres.";
+            statusText.color = Color.red;
+            return;
+        }
+
+        if (password.Length < 6)
+        {
+            statusText.text = "Senha deve ter pelo menos 6 caracteres.";
             statusText.color = Color.red;
             return;
         }
@@ -75,17 +234,52 @@ public class LoginUI : MonoBehaviour
 
         string json = JsonConvert.SerializeObject(message);
         ClientManager.Instance.SendMessage(json);
+
+        // Desabilita botão temporariamente
+        loginButton.interactable = false;
+        Invoke(nameof(EnableLoginButton), 3f); // Re-habilita após 3s
     }
+
+    private void EnableLoginButton()
+    {
+        if (loginButton != null)
+            loginButton.interactable = true;
+    }
+
+    // ===================================
+    // REGISTRO
+    // ===================================
 
     private void OnRegisterClick()
     {
-        string username = registerUsernameInput.text;
+        if (!isConnected)
+        {
+            statusText.text = "Aguarde a conexão com o servidor...";
+            statusText.color = Color.yellow;
+            return;
+        }
+
+        string username = registerUsernameInput.text.Trim();
         string password = registerPasswordInput.text;
         string confirmPassword = registerConfirmPasswordInput.text;
 
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
         {
             statusText.text = "Por favor, preencha todos os campos.";
+            statusText.color = Color.red;
+            return;
+        }
+
+        if (username.Length < 3)
+        {
+            statusText.text = "Username deve ter pelo menos 3 caracteres.";
+            statusText.color = Color.red;
+            return;
+        }
+
+        if (password.Length < 6)
+        {
+            statusText.text = "Senha deve ter pelo menos 6 caracteres.";
             statusText.color = Color.red;
             return;
         }
@@ -109,10 +303,26 @@ public class LoginUI : MonoBehaviour
 
         string json = JsonConvert.SerializeObject(message);
         ClientManager.Instance.SendMessage(json);
+
+        // Desabilita botão temporariamente
+        confirmRegisterButton.interactable = false;
+        Invoke(nameof(EnableRegisterButton), 3f);
     }
+
+    private void EnableRegisterButton()
+    {
+        if (confirmRegisterButton != null)
+            confirmRegisterButton.interactable = true;
+    }
+
+    // ===================================
+    // RESPOSTAS DO SERVIDOR
+    // ===================================
 
     private void HandleLoginResponse(LoginResponseData data)
     {
+        loginButton.interactable = true;
+
         if (data.success)
         {
             statusText.text = "Login bem-sucedido!";
@@ -120,33 +330,35 @@ public class LoginUI : MonoBehaviour
 
             PlayerPrefs.SetInt("AccountId", data.accountId);
             
-            // IMPORTANTE: Salva credenciais para recarregar personagens
+            // Salva credenciais para recarregar personagens
             PlayerPrefs.SetString("SavedUsername", usernameInput.text);
             PlayerPrefs.SetString("SavedPassword", passwordInput.text);
             PlayerPrefs.Save();
             
-            Debug.Log($"Login: Saved credentials and AccountId: {data.accountId}");
+            Debug.Log($"✅ Login: Saved credentials and AccountId: {data.accountId}");
 
-            Invoke("LoadCharacterSelect", 1f);
+            Invoke(nameof(LoadCharacterSelect), 1f);
         }
         else
         {
-            statusText.text = data.message;
+            statusText.text = data.message ?? "Erro ao fazer login";
             statusText.color = Color.red;
         }
     }
 
     private void HandleRegisterResponse(RegisterResponseData data)
     {
+        confirmRegisterButton.interactable = true;
+
         if (data.success)
         {
             statusText.text = "Conta criada! Faça login.";
             statusText.color = Color.green;
-            Invoke("ShowLoginPanel", 2f);
+            Invoke(nameof(ShowLoginPanel), 2f);
         }
         else
         {
-            statusText.text = data.message;
+            statusText.text = data.message ?? "Erro ao criar conta";
             statusText.color = Color.red;
         }
     }
@@ -154,14 +366,5 @@ public class LoginUI : MonoBehaviour
     private void LoadCharacterSelect()
     {
         SceneManager.LoadScene("CharacterSelect");
-    }
-
-    private void OnDestroy()
-    {
-        if (MessageHandler.Instance != null)
-        {
-            MessageHandler.Instance.OnLoginResponse -= HandleLoginResponse;
-            MessageHandler.Instance.OnRegisterResponse -= HandleRegisterResponse;
-        }
     }
 }
